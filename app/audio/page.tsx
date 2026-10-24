@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
   Music,
-  CloudUpload,
   Check,
   ArrowRight,
   Trash2,
@@ -17,6 +16,7 @@ import {
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { DropZone, DropZoneRef } from '@/components/DropZone';
 
 interface QueuedAudio {
   id: string;
@@ -42,18 +42,17 @@ const POPULAR_AUDIO_CONVERSIONS: {
 
 function AudioContent() {
   const [queue, setQueue] = useState<QueuedAudio[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
   const [isBatchConverting, setIsBatchConverting] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropZoneRef = useRef<DropZoneRef>(null);
   const queueSectionRef = useRef<HTMLDivElement>(null);
   const searchParams = useSearchParams();
 
   useEffect(() => {
     if (searchParams.get('autoOpen') === 'true') {
       setTimeout(() => {
-        fileInputRef.current?.click();
+        dropZoneRef.current?.open();
       }, 400);
     }
   }, [searchParams]);
@@ -68,15 +67,17 @@ function AudioContent() {
 
   const handleFiles = (
     incomingFiles: FileList | File[] | null,
-    preselectedTarget?: QueuedAudio['targetFormat']
+    preselectedTarget?: string
   ) => {
     if (!incomingFiles || incomingFiles.length === 0) return;
 
     const rawFiles = Array.from(incomingFiles);
+    const typedTarget = preselectedTarget as QueuedAudio['targetFormat'] | undefined;
+
     const newEntries: QueuedAudio[] = rawFiles.map((f, index) => {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      let defaultTarget: QueuedAudio['targetFormat'] = preselectedTarget || 'mp3';
-      if (!preselectedTarget && ext === 'mp3') {
+      let defaultTarget: QueuedAudio['targetFormat'] = typedTarget || 'mp3';
+      if (!typedTarget && ext === 'mp3') {
         defaultTarget = 'wav';
       }
 
@@ -201,9 +202,7 @@ function AudioContent() {
   };
 
   const triggerPresetUpload = (format: QueuedAudio['targetFormat']) => {
-    if (!fileInputRef.current) return;
-    fileInputRef.current.dataset.presetFormat = format;
-    fileInputRef.current.click();
+    dropZoneRef.current?.open(format);
   };
 
   return (
@@ -398,108 +397,37 @@ function AudioContent() {
               </ul>
             </div>
 
-            {/* Right Column: Dropzone & Format Cards */}
+            {/* Right Column: Reusable Dropzone & Format Cards */}
             <div className="lg:col-span-7 space-y-5">
-              {/* Outer Dropzone Card */}
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragging(true);
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setIsDragging(false);
-                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                    handleFiles(e.dataTransfer.files);
-                  }
-                }}
-                className={`bg-white dark:bg-[#111726] rounded-2xl p-4 sm:p-5 shadow-[0_12px_40px_rgba(18,57,153,0.06)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.5)] border border-slate-100 dark:border-slate-800 transition-all ${
-                  isDragging ? 'ring-2 ring-purple-600 scale-[1.005]' : ''
-                }`}
-              >
-                {/* Inner Dashed Container */}
-                <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className={`border-2 border-dashed rounded-xl py-14 sm:py-16 px-6 text-center transition-colors cursor-pointer flex flex-col items-center justify-center ${
-                    isDragging
-                      ? 'border-purple-600 bg-purple-50/30 dark:bg-purple-500/10'
-                      : 'border-purple-200/80 dark:border-slate-700 hover:border-purple-400 dark:hover:border-slate-500 bg-[#fbfcff] dark:bg-[#0e1422]'
-                  }`}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept="audio/*,.mp3,.wav,.aac,.flac,.ogg,.m4a"
-                    onChange={(e) => {
-                      const preset = e.target.dataset.presetFormat as
-                        | QueuedAudio['targetFormat']
-                        | undefined;
-                      if (e.target.files && e.target.files.length > 0) {
-                        handleFiles(e.target.files, preset);
-                        e.target.value = '';
-                        delete e.target.dataset.presetFormat;
-                      }
-                    }}
-                    className="hidden"
-                  />
-
-                  {/* Cloud Upload Icon */}
-                  <div className="w-16 h-16 rounded-full bg-purple-50/80 dark:bg-purple-500/10 flex items-center justify-center text-purple-600 dark:text-purple-400 mb-4">
-                    <CloudUpload className="w-8 h-8 stroke-[1.5]" />
-                  </div>
-
-                  <p className="text-base sm:text-lg font-semibold text-slate-700 dark:text-slate-200 mb-1.5">
-                    Drop your audio file here or click to upload
-                  </p>
-                  <p className="text-xs sm:text-sm text-slate-400 dark:text-slate-400 mb-1">
-                    Supports MP3, WAV, AAC, FLAC, OGG, M4A, and more
-                  </p>
-                  <p className="text-xs text-slate-400 dark:text-slate-500 mb-6">
-                    Max file size: 100 MB
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      fileInputRef.current?.click();
-                    }}
-                    className="inline-flex items-center gap-2 bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 text-white text-xs sm:text-sm font-medium px-8 py-3 rounded-full shadow-md shadow-blue-900/15 transition-all cursor-pointer"
-                  >
-                    <CloudUpload className="w-4 h-4" />
-                    <span>Choose File</span>
-                  </button>
-                </div>
-              </div>
+              <DropZone
+                ref={dropZoneRef}
+                accept="audio/*,.mp3,.wav,.aac,.flac,.ogg,.m4a"
+                maxSizeLabel="100 MB"
+                description="Supports MP3, WAV, AAC, FLAC, OGG, M4A, and more"
+                onFilesSelected={(files, preset) => handleFiles(files, preset)}
+                ringColorClass="ring-2 ring-purple-600"
+              />
 
               {/* 5 Quick Audio Format Cards Below Dropzone */}
               <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
-                {[
-                  { fmt: 'mp3' as const, label: 'MP3', bg: 'bg-[#9333ea]' },
-                  { fmt: 'wav' as const, label: 'WAV', bg: 'bg-[#2563eb]' },
-                  { fmt: 'aac' as const, label: 'AAC', bg: 'bg-[#16a34a]' },
-                  { fmt: 'flac' as const, label: 'FLAC', bg: 'bg-[#db2777]' },
-                  { fmt: 'ogg' as const, label: 'OGG', bg: 'bg-[#f97316]' },
-                ].map((item, idx) => (
+                {POPULAR_AUDIO_CONVERSIONS.map((item, idx) => (
                   <div
                     key={idx}
-                    onClick={() => triggerPresetUpload(item.fmt)}
+                    onClick={() => triggerPresetUpload(item.to)}
                     className="bg-white dark:bg-[#111726] p-3 rounded-xl border border-slate-100 dark:border-slate-800 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-none hover:shadow-md hover:border-purple-200 dark:hover:border-purple-500/50 transition-all cursor-pointer flex items-center justify-between gap-2 group"
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <div
                         className={`w-8 h-8 rounded-lg ${item.bg} text-white flex items-center justify-center font-bold text-[11px] shrink-0 shadow-xs uppercase`}
                       >
-                        {item.fmt}
+                        {item.to}
                       </div>
                       <div className="min-w-0">
                         <p className="text-xs font-bold text-slate-800 dark:text-white uppercase">
-                          {item.label}
+                          {item.to}
                         </p>
                         <p className="text-[10px] text-slate-400 dark:text-slate-400 leading-tight truncate">
-                          Convert to {item.label}
+                          {item.from} to {item.to}
                         </p>
                       </div>
                     </div>
@@ -514,36 +442,36 @@ function AudioContent() {
           <div ref={queueSectionRef} className="mt-10 max-w-5xl mx-auto space-y-4">
             {queue.length > 0 && (
               <>
-                <div className="flex flex-wrap items-center justify-between gap-3 bg-white dark:bg-[#111726] p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
-                  <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200">
+                <div className="bg-white dark:bg-[#111726] p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-[0_10px_30px_rgba(18,57,153,0.05)] flex flex-wrap sm:flex-nowrap items-center justify-between gap-3">
+                  <span className="text-xs sm:text-sm font-bold text-slate-800 dark:text-white">
                     {queue.length} audio file{queue.length > 1 ? 's' : ''} queued
                   </span>
-                  <div className="flex items-center gap-2 sm:gap-3">
+                  <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end flex-wrap sm:flex-nowrap">
                     <button
                       onClick={() => setQueue([])}
-                      className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                      className="text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 px-3 py-2 rounded-xl transition-colors cursor-pointer"
                     >
                       Clear All
                     </button>
                     <button
                       onClick={convertAll}
                       disabled={isBatchConverting}
-                      className="inline-flex items-center gap-1.5 bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
+                      className="inline-flex items-center gap-2 bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold px-4 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-blue-900/15 cursor-pointer"
                     >
                       <RefreshCw
                         className={`w-3.5 h-3.5 ${
                           isBatchConverting ? 'animate-spin' : ''
                         }`}
                       />
-                      Convert All
+                      <span>{isBatchConverting ? 'Converting...' : 'Start Conversion'}</span>
                     </button>
                     {queue.some((q) => q.status === 'completed') && (
                       <button
                         onClick={downloadAllZip}
-                        className="inline-flex items-center gap-1.5 bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
+                        className="inline-flex items-center gap-1.5 bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer shadow-xs"
                       >
-                        <Archive className="w-3.5 h-3.5" />
-                        Download ZIP
+                        <Archive className="w-4 h-4" />
+                        <span>ZIP</span>
                       </button>
                     )}
                   </div>
@@ -553,25 +481,27 @@ function AudioContent() {
                   {queue.map((item) => (
                     <div
                       key={item.id}
-                      className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-4 bg-white dark:bg-[#111726] rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-xs"
+                      className="p-4 sm:p-5 bg-white dark:bg-[#111726] rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs hover:shadow-md transition-shadow flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4"
                     >
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div className="w-10 h-10 rounded-lg bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
+                      {/* Left: Icon, Name & Size */}
+                      <div className="flex items-center gap-3.5 min-w-0 flex-1 pr-2">
+                        <div className="w-11 h-11 rounded-xl bg-purple-50 dark:bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 shadow-xs">
                           <Music className="w-5 h-5" />
                         </div>
-                        <div className="truncate">
+                        <div className="min-w-0 flex-1">
                           <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-white truncate">
                             {item.file.name}
                           </p>
-                          <p className="text-[11px] text-slate-400">
+                          <p className="text-[11px] text-slate-400 mt-0.5">
                             {formatBytes(item.file.size)}
                           </p>
                         </div>
                       </div>
 
-                      <div className="flex items-center justify-between sm:justify-end gap-3 border-t sm:border-t-0 pt-2 sm:pt-0 border-slate-100 dark:border-slate-800">
+                      {/* Right: Controls & Fixed-Width Action Buttons */}
+                      <div className="flex flex-wrap md:flex-nowrap items-center justify-between md:justify-end gap-3 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800/80 shrink-0">
                         <div className="flex items-center gap-2">
-                          <label className="text-[11px] text-slate-500 dark:text-slate-400">
+                          <label className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
                             Convert to:
                           </label>
                           <select
@@ -582,7 +512,7 @@ function AudioContent() {
                                 e.target.value as QueuedAudio['targetFormat']
                               )
                             }
-                            className="text-xs font-medium bg-[#f4f6fa] dark:bg-[#0e1422] border border-slate-200 dark:border-slate-700 rounded-md px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-purple-600 dark:focus:ring-purple-400 cursor-pointer uppercase"
+                            className="text-xs font-medium bg-[#f4f6fa] dark:bg-[#0e1422] border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-purple-600 dark:focus:ring-purple-400 cursor-pointer uppercase"
                           >
                             <option value="mp3">MP3</option>
                             <option value="wav">WAV</option>
@@ -593,18 +523,20 @@ function AudioContent() {
                           </select>
                         </div>
 
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 shrink-0 ml-auto md:ml-0">
                           {item.status === 'completed' && (
                             <button
                               onClick={() => downloadSingle(item)}
-                              className="inline-flex items-center gap-1 bg-emerald-50 dark:bg-emerald-500/15 text-[#38c18c] dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/25 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer"
+                              className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 bg-emerald-50 dark:bg-emerald-500/15 text-[#38c18c] dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/25 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer shadow-xs"
                             >
                               <Download className="w-3.5 h-3.5" />
-                              Download
+                              <span>Download</span>
                             </button>
                           )}
                           {item.status === 'converting' && (
-                            <RefreshCw className="w-4 h-4 text-purple-600 dark:text-purple-400 animate-spin mx-2" />
+                            <div className="w-28 sm:w-32 flex items-center justify-center py-1.5">
+                              <RefreshCw className="w-4 h-4 text-purple-600 dark:text-purple-400 animate-spin" />
+                            </div>
                           )}
                           {item.status === 'error' && (
                             <span title={item.error}>
@@ -614,14 +546,16 @@ function AudioContent() {
                           {item.status === 'idle' && (
                             <button
                               onClick={() => convertSingle(item.id)}
-                              className="text-xs font-semibold text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-500/15 px-3 py-1.5 rounded-full transition-colors cursor-pointer"
+                              className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-white bg-purple-600 dark:bg-purple-600 hover:bg-purple-700 dark:hover:bg-purple-500 py-1.5 rounded-xl transition-all shadow-md shadow-purple-900/15 cursor-pointer"
                             >
-                              Convert
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>Convert</span>
                             </button>
                           )}
                           <button
                             onClick={() => removeFile(item.id)}
-                            className="p-1.5 text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15 rounded-md transition-colors cursor-pointer"
+                            className="p-2 text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15 rounded-xl transition-colors cursor-pointer"
+                            title="Remove from Queue"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -656,7 +590,7 @@ function AudioContent() {
                 >
                   <div className="min-w-0 pr-2">
                     <div className="flex items-center gap-1.5 font-semibold text-slate-800 dark:text-slate-200 text-xs sm:text-sm">
-                      <span className="text-purple-600 dark:text-purple-400">{item.from}</span>
+                      <span className="text-purple-600 dark:text-purple-400 uppercase">{item.from}</span>
                       <span className="text-slate-300 dark:text-slate-600 font-normal">→</span>
                       <span className="text-[#20b486] dark:text-emerald-400 uppercase">
                         {item.to}

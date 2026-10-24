@@ -16,7 +16,7 @@ import {
   Sliders,
   ShieldCheck,
   Smartphone,
-  Image as ImageIcon,
+  ImageIcon,
   Film,
   Music,
   FileText,
@@ -27,6 +27,7 @@ import JSZip from 'jszip';
 import useDrivePicker from 'react-google-drive-picker';
 import { convertImage, getExtensionFromMime } from '@/lib/converters/image';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { DropZone, DropZoneRef } from '@/components/DropZone';
 
 interface QueuedFile {
   id: string;
@@ -136,7 +137,6 @@ const POPULAR_FORMATS: Record<
 
 export default function Home() {
   const [queue, setQueue] = useState<QueuedFile[]>([]);
-  const [isDragging, setIsDragging] = useState(false);
   const [isBatchConverting, setIsBatchConverting] = useState(false);
   const [isLoadingDrive, setIsLoadingDrive] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -146,7 +146,7 @@ export default function Home() {
   const [openPicker, authResponse] = useDrivePicker();
   const accessTokenRef = useRef<string | undefined>(undefined);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dropZoneRef = useRef<DropZoneRef>(null);
   const queueSectionRef = useRef<HTMLDivElement>(null);
   const debounceTimers = useRef<{ [key: string]: NodeJS.Timeout }>({});
 
@@ -160,7 +160,7 @@ export default function Home() {
     return () => {
       queue.forEach((item) => URL.revokeObjectURL(item.previewUrl));
     };
-  }, []);
+  }, [queue]);
 
   const formatBytes = (bytes?: number): string => {
     if (!bytes || bytes === 0) return '0 KB';
@@ -231,6 +231,9 @@ export default function Home() {
     });
 
     setQueue((prev) => [...prev, ...newEntries]);
+    setTimeout(() => {
+      queueSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 150);
   };
 
   const handleOpenGoogleDrive = () => {
@@ -351,7 +354,7 @@ export default function Home() {
     }, 200);
   };
 
-  const convertSingle = async (id: string) => {
+  const convertSingle = async (id: string): Promise<Blob | undefined> => {
     const item = queue.find((q) => q.id === id);
     if (!item) return;
 
@@ -379,6 +382,7 @@ export default function Home() {
             : q
         )
       );
+      return blob;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Conversion failed';
       setQueue((prev) =>
@@ -386,6 +390,7 @@ export default function Home() {
           q.id === id ? { ...q, status: 'error', error: message } : q
         )
       );
+      return undefined;
     }
   };
 
@@ -402,10 +407,9 @@ export default function Home() {
   const downloadSingle = (item: QueuedFile) => {
     if (!item.convertedBlob) return;
     const ext = getExtensionFromMime(item.targetFormat);
+    const lastDot = item.file.name.lastIndexOf('.');
     const baseName =
-      item.file.name.substring(0, item.file.name.lastIndexOf('.')) ||
-      item.file.name ||
-      'image';
+      lastDot !== -1 ? item.file.name.substring(0, lastDot) : item.file.name;
     const link = document.createElement('a');
     link.href = URL.createObjectURL(item.convertedBlob);
     link.download = `${baseName}.${ext}`;
@@ -417,14 +421,30 @@ export default function Home() {
     const zip = new JSZip();
     let count = 0;
 
+    // Automatically convert any pending/idle files so nothing gets left out
+    for (const item of queue) {
+      if (item.status !== 'completed') {
+        await convertSingle(item.id);
+      }
+    }
+
+    // Iterate through the updated queue state to pack every converted blob
     queue.forEach((item) => {
       if (item.convertedBlob) {
         const ext = getExtensionFromMime(item.targetFormat);
+        const lastDot = item.file.name.lastIndexOf('.');
         const baseName =
-          item.file.name.substring(0, item.file.name.lastIndexOf('.')) ||
-          item.file.name ||
-          'image';
-        zip.file(`${baseName}.${ext}`, item.convertedBlob);
+          lastDot !== -1 ? item.file.name.substring(0, lastDot) : item.file.name;
+
+        // Prevent filename collisions inside the zip archive
+        let fileName = `${baseName}.${ext}`;
+        let counter = 1;
+        while (zip.file(fileName) !== null) {
+          fileName = `${baseName}_${counter}.${ext}`;
+          counter++;
+        }
+
+        zip.file(fileName, item.convertedBlob);
         count++;
       }
     });
@@ -443,7 +463,7 @@ export default function Home() {
     if (tab === 'Documents') {
       window.location.href = '/documents?autoOpen=true';
     } else if (tab === 'Images') {
-      fileInputRef.current?.click();
+      dropZoneRef.current?.open();
     } else if (tab === 'Audio') {
       window.location.href = '/audio?autoOpen=true';
     } else if (tab === 'Video') {
@@ -508,7 +528,6 @@ export default function Home() {
 
           {/* Right Section: Theme Toggle, My Files & Mobile Hamburger */}
           <div className="flex items-center gap-3">
-            {/* Reusable Theme Toggle Component */}
             <ThemeToggle />
 
             <div className="flex items-center pl-3 sm:pl-4 border-l border-slate-200 dark:border-slate-800">
@@ -638,127 +657,108 @@ export default function Home() {
             </p>
           </header>
 
-          {/* Center Dropzone Card */}
+          {/* Center Dropzone Card using Reusable <DropZone/> */}
           <div className="max-w-2xl mx-auto relative mb-16">
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                setIsDragging(true);
-              }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragging(false);
-                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                  handleFiles(e.dataTransfer.files);
-                }
-              }}
-              className={`bg-white dark:bg-[#111726] rounded-xl p-3 sm:p-4 shadow-[0_15px_45px_rgba(18,57,153,0.08)] dark:shadow-[0_15px_45px_rgba(0,0,0,0.5)] border border-transparent dark:border-slate-800 transition-all ${
-                isDragging ? 'ring-2 ring-[#38c18c] scale-[1.01]' : ''
-              }`}
-            >
-              {/* Inner Dashed Area */}
-              <div
-                className={`relative border border-dashed rounded-lg py-12 sm:py-16 px-4 text-center transition-colors cursor-pointer ${
-                  isDragging
-                    ? 'border-[#38c18c] bg-emerald-50/30 dark:bg-emerald-500/10'
-                    : 'border-slate-300/90 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-600 bg-white dark:bg-[#0e1422]'
-                }`}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files.length > 0) {
-                      handleFiles(e.target.files);
-                      e.target.value = '';
-                    }
-                  }}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                />
-
-                <div className="flex flex-col items-center justify-center space-y-4 pointer-events-none">
-                  <div className="w-12 h-12 rounded-full border border-[#38c18c] flex items-center justify-center text-[#38c18c] dark:bg-emerald-500/10">
-                    <Plus className="w-6 h-6 stroke-[1.5]" />
+            <DropZone
+              ref={dropZoneRef}
+              accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.svg,.tiff"
+              maxSizeLabel="100 MB"
+              onFilesSelected={(files) => handleFiles(files)}
+              ringColorClass="ring-2 ring-[#38c18c]"
+              hideButton={true}
+              customInner={
+                <div className="bg-white dark:bg-[#111726] rounded-xl p-3 sm:p-4 shadow-[0_15px_45px_rgba(18,57,153,0.08)] dark:shadow-[0_15px_45px_rgba(0,0,0,0.5)] border border-transparent dark:border-slate-800 transition-all">
+                  <div className="relative border border-dashed rounded-lg py-12 sm:py-16 px-4 text-center transition-colors cursor-pointer border-slate-300/90 dark:border-slate-700 hover:border-slate-400 dark:hover:border-slate-600 bg-white dark:bg-[#0e1422]">
+                    <div className="flex flex-col items-center justify-center space-y-4 pointer-events-none">
+                      <div className="w-12 h-12 rounded-full border border-[#38c18c] flex items-center justify-center text-[#38c18c] dark:bg-emerald-500/10">
+                        <Plus className="w-6 h-6 stroke-[1.5]" />
+                      </div>
+                      <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 font-normal">
+                        Drop files here. 100 MB maximum file size
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 font-normal">
-                    Drop files here. 100 MB maximum file size
-                  </p>
                 </div>
+              }
+            >
+              {/* Overlapping Split Royal-Blue Pill Button */}
+              <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center bg-[#123999] dark:bg-blue-600 text-white rounded-full shadow-lg overflow-hidden text-xs sm:text-[13px] font-medium whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={() => dropZoneRef.current?.open()}
+                  className="flex items-center gap-2 px-5 sm:px-6 py-2.5 hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors cursor-pointer"
+                >
+                  <Monitor className="w-4 h-4 stroke-[1.75]" />
+                  <span>Choose File</span>
+                </button>
+                <div className="w-[1px] h-5 bg-blue-400/40" />
+                <button
+                  type="button"
+                  onClick={handleOpenGoogleDrive}
+                  disabled={isLoadingDrive}
+                  className="flex items-center gap-2 px-5 sm:px-6 py-2.5 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-60 transition-colors cursor-pointer"
+                >
+                  {isLoadingDrive ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <HardDrive className="w-4 h-4 stroke-[1.75]" />
+                  )}
+                  <span>
+                    {isLoadingDrive ? 'Importing...' : 'From Google Drive'}
+                  </span>
+                </button>
               </div>
-            </div>
-
-            {/* Overlapping Split Royal-Blue Pill Button */}
-            <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 z-20 flex items-center bg-[#123999] dark:bg-blue-600 text-white rounded-full shadow-lg overflow-hidden text-xs sm:text-[13px] font-medium whitespace-nowrap">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center gap-2 px-5 sm:px-6 py-2.5 hover:bg-blue-800 dark:hover:bg-blue-500 transition-colors cursor-pointer"
-              >
-                <Monitor className="w-4 h-4 stroke-[1.75]" />
-                <span>Choose File</span>
-              </button>
-              <div className="w-[1px] h-5 bg-blue-400/40" />
-              <button
-                type="button"
-                onClick={handleOpenGoogleDrive}
-                disabled={isLoadingDrive}
-                className="flex items-center gap-2 px-5 sm:px-6 py-2.5 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-60 transition-colors cursor-pointer"
-              >
-                {isLoadingDrive ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  <HardDrive className="w-4 h-4 stroke-[1.75]" />
-                )}
-                <span>
-                  {isLoadingDrive ? 'Importing...' : 'From Google Drive'}
-                </span>
-              </button>
-            </div>
+            </DropZone>
           </div>
 
-          {/* Queued Files & Batch Action Section */}
+          {/* Unified Control Bar & Queued Files Section */}
           <div ref={queueSectionRef} className="max-w-3xl mx-auto space-y-4 mb-16">
             {queue.length > 0 && (
-              <div className="flex flex-wrap items-center justify-between gap-3 bg-[#f4f6fa] dark:bg-[#111726] p-3.5 sm:p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 shadow-xs">
-                <span className="text-xs sm:text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  {queue.length} file{queue.length > 1 ? 's' : ''} queued
-                </span>
-                <div className="flex items-center gap-2 sm:gap-3">
+              <div className="bg-white dark:bg-[#111726] px-4 sm:px-5 py-3.5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-[0_10px_30px_rgba(18,57,153,0.05)] flex flex-col sm:flex-row items-center justify-between gap-3">
+                {/* Left: Queue Info / Status */}
+                <div className="flex items-center gap-2.5 w-full sm:w-auto justify-between sm:justify-start">
+                  <span className="text-xs sm:text-sm font-bold text-slate-800 dark:text-white">
+                    {queue.length} file{queue.length > 1 ? 's' : ''} queued
+                  </span>
+                </div>
+
+                {/* Right: Clean Control Bar Actions */}
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap sm:flex-nowrap">
+                  {/* Clear All Button */}
                   <button
                     onClick={() => setQueue([])}
-                    className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer"
+                    className="text-xs font-medium text-slate-500 dark:text-slate-400 hover:text-red-600 dark:hover:text-red-400 px-3 py-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors cursor-pointer"
                   >
                     Clear All
                   </button>
+
+                  {/* Start Conversion Button */}
                   <button
                     onClick={convertAll}
                     disabled={isBatchConverting}
-                    className="inline-flex items-center gap-1.5 bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
+                    className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold px-4 py-2.5 rounded-xl transition-all shadow-md shadow-blue-900/15 cursor-pointer"
                   >
                     <RefreshCw
                       className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
                         isBatchConverting ? 'animate-spin' : ''
                       }`}
                     />
-                    Convert All
+                    <span>{isBatchConverting ? 'Converting...' : 'Start Conversion'}</span>
                   </button>
-                  {queue.some((q) => q.status === 'completed') && (
-                    <button
-                      onClick={downloadAllZip}
-                      className="inline-flex items-center gap-1.5 bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-full transition-colors cursor-pointer shadow-xs"
-                    >
-                      <Archive className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-                      Download ZIP
-                    </button>
-                  )}
+
+                  {/* Download ZIP */}
+                  <button
+                    onClick={downloadAllZip}
+                    className="inline-flex items-center justify-center gap-1.5 bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer shadow-xs"
+                  >
+                    <Archive className="w-4 h-4" />
+                    <span>ZIP</span>
+                  </button>
                 </div>
               </div>
             )}
 
-            {/* Queued Cards with Thumbnail Preview */}
+            {/* Queued Cards with Responsive Layout Fix for Mobile */}
             <div className="space-y-3">
               {queue.map((item) => {
                 const originalSize = item.file.size;
@@ -774,36 +774,36 @@ export default function Home() {
                 return (
                   <div
                     key={item.id}
-                    className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3.5 sm:p-4 bg-white dark:bg-[#111726] rounded-xl border border-slate-200/90 dark:border-slate-800 shadow-xs hover:shadow-md transition-shadow"
+                    className="p-4 sm:p-5 bg-white dark:bg-[#111726] rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs hover:shadow-md transition-shadow flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4"
                   >
-                    {/* Thumbnail Preview & File Details */}
-                    <div className="flex items-center gap-3 overflow-hidden min-w-0">
+                    {/* Left: Thumbnail, Name & Size */}
+                    <div className="flex items-center gap-3.5 min-w-0 flex-1 pr-2">
                       <img
                         src={item.previewUrl}
                         alt={item.file.name}
-                        className="w-12 h-12 object-cover rounded-lg border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100 dark:bg-slate-800"
+                        className="w-11 h-11 object-cover rounded-xl border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100 dark:bg-slate-800 shadow-xs"
                       />
-                      <div className="truncate">
+                      <div className="min-w-0 flex-1">
                         <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-white truncate">
                           {item.file.name || 'Selected Image'}
                         </p>
                         <div className="flex items-center gap-1.5 text-[11px] sm:text-xs mt-0.5 text-slate-500 dark:text-slate-400">
-                          <span>{formatBytes(originalSize)}</span>
+                          <span className="shrink-0">{formatBytes(originalSize)}</span>
                           {targetSize && (
                             <>
-                              <span className="text-slate-300 dark:text-slate-600">→</span>
+                              <span className="text-slate-300 dark:text-slate-600 shrink-0">→</span>
                               <span
                                 className={
                                   item.isEstimating
-                                    ? 'opacity-40'
-                                    : 'text-[#123999] dark:text-blue-400 font-semibold'
+                                    ? 'opacity-40 shrink-0'
+                                    : 'text-[#123999] dark:text-blue-400 font-semibold shrink-0'
                                 }
                               >
                                 {formatBytes(targetSize)}
                               </span>
                               {savingsPercent !== null &&
                                 savingsPercent > 0 && (
-                                  <span className="text-[#38c18c] dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/15 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+                                  <span className="text-[#38c18c] dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/15 px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0">
                                     -{savingsPercent}%
                                   </span>
                                 )}
@@ -813,10 +813,10 @@ export default function Home() {
                       </div>
                     </div>
 
-                    {/* Format, Quality Slider & Actions */}
-                    <div className="flex flex-wrap items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 dark:border-slate-800">
+                    {/* Right: Controls (Format, Slider, Convert, Delete) cleanly wrapped on mobile */}
+                    <div className="flex flex-wrap md:flex-nowrap items-center justify-between md:justify-end gap-3 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800/80 shrink-0">
                       <div className="flex items-center gap-2">
-                        <label className="text-[11px] text-slate-500 dark:text-slate-400">To:</label>
+                        <label className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">To:</label>
                         <select
                           value={item.targetFormat}
                           onChange={(e) =>
@@ -828,7 +828,7 @@ export default function Home() {
                                 | 'image/webp'
                             )
                           }
-                          className="text-xs font-medium bg-[#f4f6fa] dark:bg-[#0e1422] border border-slate-200 dark:border-slate-700 rounded-md px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#123999] dark:focus:ring-blue-500 cursor-pointer"
+                          className="text-xs font-medium bg-[#f4f6fa] dark:bg-[#0e1422] border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#123999] dark:focus:ring-blue-500 cursor-pointer"
                         >
                           <option value="image/png">PNG</option>
                           <option value="image/jpeg">JPG</option>
@@ -836,43 +836,48 @@ export default function Home() {
                         </select>
                       </div>
 
-                      {item.targetFormat !== 'image/png' && (
-                        <div className="flex items-center gap-1.5">
-                          <label className="text-[11px] text-slate-500 dark:text-slate-400">
-                            Quality:
-                          </label>
-                          <input
-                            type="range"
-                            min="0.1"
-                            max="1"
-                            step="0.05"
-                            value={item.quality}
-                            onChange={(e) =>
-                              handleQualityChange(
-                                item.id,
-                                parseFloat(e.target.value)
-                              )
-                            }
-                            className="w-16 sm:w-20 accent-[#123999] dark:accent-blue-500 cursor-pointer"
-                          />
-                          <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium w-8">
-                            {Math.round(item.quality * 100)}%
-                          </span>
-                        </div>
-                      )}
+                      {/* Quality Slider */}
+                      <div className="flex items-center gap-1.5">
+                        <label className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:inline shrink-0">
+                          Quality:
+                        </label>
+                        <input
+                          type="range"
+                          min="0.1"
+                          max="1"
+                          step="0.05"
+                          value={item.quality}
+                          disabled={item.targetFormat === 'image/png'}
+                          onChange={(e) =>
+                            handleQualityChange(
+                              item.id,
+                              parseFloat(e.target.value)
+                            )
+                          }
+                          className={`w-16 sm:w-20 accent-[#123999] dark:accent-blue-500 cursor-pointer ${
+                            item.targetFormat === 'image/png' ? 'opacity-40 cursor-not-allowed' : ''
+                          }`}
+                        />
+                        <span className="text-[11px] text-slate-600 dark:text-slate-300 font-medium w-8 text-right shrink-0">
+                          {item.targetFormat === 'image/png' ? '100%' : `${Math.round(item.quality * 100)}%`}
+                        </span>
+                      </div>
 
-                      <div className="flex items-center gap-1">
+                      {/* Action Button & Delete Icon */}
+                      <div className="flex items-center gap-1.5 shrink-0 ml-auto md:ml-0">
                         {item.status === 'completed' && (
                           <button
                             onClick={() => downloadSingle(item)}
-                            className="p-1.5 text-[#38c18c] dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/15 rounded-md transition-colors cursor-pointer"
-                            title="Download Converted File"
+                            className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 bg-emerald-50 dark:bg-emerald-500/15 text-[#38c18c] dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/25 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer shadow-xs"
                           >
-                            <Download className="w-4 h-4" />
+                            <Download className="w-3.5 h-3.5" />
+                            <span>Download</span>
                           </button>
                         )}
                         {item.status === 'converting' && (
-                          <RefreshCw className="w-4 h-4 text-[#123999] dark:text-blue-400 animate-spin" />
+                          <div className="w-28 sm:w-32 flex items-center justify-center py-1.5">
+                            <RefreshCw className="w-4 h-4 text-[#123999] dark:text-blue-400 animate-spin" />
+                          </div>
                         )}
                         {item.status === 'error' && (
                           <span title={item.error}>
@@ -882,14 +887,15 @@ export default function Home() {
                         {item.status === 'idle' && (
                           <button
                             onClick={() => convertSingle(item.id)}
-                            className="text-xs font-semibold text-[#123999] dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/15 px-3 py-1.5 rounded-full transition-colors cursor-pointer"
+                            className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-white bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 py-1.5 rounded-xl transition-all shadow-md shadow-blue-900/15 cursor-pointer"
                           >
-                            Convert
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            <span>Convert</span>
                           </button>
                         )}
                         <button
                           onClick={() => removeFile(item.id)}
-                          className="p-1.5 text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15 rounded-md transition-colors cursor-pointer"
+                          className="p-2 text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15 rounded-xl transition-colors cursor-pointer"
                           title="Remove from Queue"
                         >
                           <Trash2 className="w-4 h-4" />
