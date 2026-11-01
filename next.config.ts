@@ -7,6 +7,7 @@ const nextConfig: NextConfig = {
   },
   cacheComponents: true,
   partialPrefetching: true,
+  serverExternalPackages: ['pdfjs-dist', '@napi-rs/canvas'],
   turbopack: {
     rules: {
       "*.css": {

@@ -18,19 +18,21 @@ import JSZip from 'jszip';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { DropZone, DropZoneRef } from '@/components/DropZone';
 import { convertDocument } from '@/lib/converters/document';
+import { getAllowedDocumentFormats } from '@/lib/converters/documentRules';
 
 interface QueuedDoc {
   id: string;
   file: File;
-  targetFormat: 'pdf' | 'docx' | 'txt' | 'xlsx' | 'pptx';
+  targetFormat: string;
   status: 'idle' | 'converting' | 'completed' | 'error';
   convertedBlob?: Blob;
+  estimatedSize?: number;
   error?: string;
 }
 
 const POPULAR_DOC_CONVERSIONS: {
   from: string;
-  to: QueuedDoc['targetFormat'];
+  to: string;
   desc: string;
 }[] = [
   { from: 'PDF', to: 'docx', desc: 'Adobe PDF to Word Document' },
@@ -60,7 +62,7 @@ function DocumentsContent() {
     }
   }, [searchParams]);
 
-  const formatBytes = (bytes: number): string => {
+  const formatBytes = (bytes?: number): string => {
     if (!bytes || bytes === 0) return '0 KB';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
@@ -75,13 +77,44 @@ function DocumentsContent() {
     if (!incomingFiles || incomingFiles.length === 0) return;
 
     const rawFiles = Array.from(incomingFiles);
-    const typedTarget = preselectedTarget as QueuedDoc['targetFormat'] | undefined;
+    const TEN_MB = 10 * 1024 * 1024;
 
-    const newEntries: QueuedDoc[] = rawFiles.map((f, index) => {
+    const validFiles: File[] = [];
+    const skippedFiles: string[] = [];
+
+    rawFiles.forEach((f) => {
+      if (f.size > TEN_MB) {
+        skippedFiles.push(f.name);
+      } else {
+        validFiles.push(f);
+      }
+    });
+
+    if (skippedFiles.length > 0) {
+      alert(
+        `File size limit exceeded: The following file(s) exceeded the 10 MB limit and were not added:\n• ${skippedFiles.join(
+          '\n• '
+        )}`
+      );
+    }
+
+    if (validFiles.length === 0) return;
+
+    const newEntries: QueuedDoc[] = validFiles.map((f, index) => {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      let defaultTarget: QueuedDoc['targetFormat'] = typedTarget || 'pdf';
-      if (!typedTarget && ext === 'pdf') {
-        defaultTarget = 'docx';
+      
+      let defaultTarget = preselectedTarget || 'pdf';
+      if (!preselectedTarget) {
+        if (ext === 'pdf') defaultTarget = 'docx';
+        else if (ext === 'docx' || ext === 'doc' || ext === 'txt') defaultTarget = 'pdf';
+      }
+
+      // Initial rough size estimation based on format
+      let estimatedSize = f.size;
+      if (defaultTarget === 'txt') {
+        estimatedSize = Math.round(f.size * 0.15); // Text extraction is usually much smaller
+      } else if (defaultTarget === 'pdf' || defaultTarget === 'docx') {
+        estimatedSize = Math.round(f.size * 1.1);
       }
 
       return {
@@ -89,6 +122,7 @@ function DocumentsContent() {
         file: f,
         targetFormat: defaultTarget,
         status: 'idle',
+        estimatedSize,
       };
     });
 
@@ -102,16 +136,26 @@ function DocumentsContent() {
     setQueue((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const updateTargetFormat = (
-    id: string,
-    targetFormat: QueuedDoc['targetFormat']
-  ) => {
+  const updateTargetFormat = (id: string, targetFormat: string) => {
     setQueue((prev) =>
-      prev.map((q) =>
-        q.id === id
-          ? { ...q, targetFormat, status: 'idle', convertedBlob: undefined }
-          : q
-      )
+      prev.map((q) => {
+        if (q.id === id) {
+          let estimatedSize = q.file.size;
+          if (targetFormat === 'txt') {
+            estimatedSize = Math.round(q.file.size * 0.15);
+          } else if (targetFormat === 'pdf' || targetFormat === 'docx') {
+            estimatedSize = Math.round(q.file.size * 1.1);
+          }
+          return {
+            ...q,
+            targetFormat,
+            status: 'idle',
+            convertedBlob: undefined,
+            estimatedSize,
+          };
+        }
+        return q;
+      })
     );
   };
 
@@ -126,14 +170,20 @@ function DocumentsContent() {
     );
 
     try {
-      // Execute the real document conversion utility
       const convertedBlob = await convertDocument(item.file, {
-        targetFormat: item.targetFormat,
+        targetFormat: item.targetFormat as any,
       });
 
       setQueue((prev) =>
         prev.map((q) =>
-          q.id === id ? { ...q, status: 'completed', convertedBlob } : q
+          q.id === id
+            ? {
+                ...q,
+                status: 'completed',
+                convertedBlob,
+                estimatedSize: convertedBlob.size,
+              }
+            : q
         )
       );
     } catch (err: unknown) {
@@ -162,9 +212,15 @@ function DocumentsContent() {
       item.file.name.substring(0, item.file.name.lastIndexOf('.')) ||
       item.file.name ||
       'document';
+    
+    const isPdfToImage =
+      item.file.type === 'application/pdf' &&
+      (item.targetFormat === 'png' || item.targetFormat === 'jpeg' || item.targetFormat === 'jpg');
+    const fileExtension = isPdfToImage ? 'zip' : item.targetFormat;
+
     const link = document.createElement('a');
     link.href = URL.createObjectURL(item.convertedBlob);
-    link.download = `${baseName}.${item.targetFormat}`;
+    link.download = `${baseName}_to_${item.targetFormat}.${fileExtension}`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -179,7 +235,12 @@ function DocumentsContent() {
           item.file.name.substring(0, item.file.name.lastIndexOf('.')) ||
           item.file.name ||
           'document';
-        zip.file(`${baseName}.${item.targetFormat}`, item.convertedBlob);
+        const isPdfToImage =
+          item.file.type === 'application/pdf' &&
+          (item.targetFormat === 'png' || item.targetFormat === 'jpeg' || item.targetFormat === 'jpg');
+        const fileExtension = isPdfToImage ? 'zip' : item.targetFormat;
+
+        zip.file(`${baseName}.${fileExtension}`, item.convertedBlob);
         count++;
       }
     });
@@ -194,16 +255,17 @@ function DocumentsContent() {
     URL.revokeObjectURL(link.href);
   };
 
-  const triggerPresetUpload = (format: QueuedDoc['targetFormat']) => {
+  const triggerPresetUpload = (format: string) => {
     dropZoneRef.current?.open(format);
   };
+
+  const areAllFilesReady = queue.length > 0 && queue.every((q) => q.status === 'completed');
 
   return (
     <div className="min-h-screen bg-[#f8fafd] dark:bg-[#0b101b] text-slate-800 dark:text-slate-200 flex flex-col justify-between font-sans selection:bg-blue-100 dark:selection:bg-blue-500/30 transition-colors">
       {/* Top Navbar */}
       <nav className="border-b border-slate-100 dark:border-slate-800/80 bg-white dark:bg-[#0b101b] sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-8 h-16 flex items-center justify-between text-xs sm:text-[13px]">
-          {/* Brand Logo */}
           <Link href="/" className="flex items-center gap-2.5 cursor-pointer">
             <div className="relative w-7 h-7 flex items-center justify-center">
               <svg className="w-full h-full -rotate-45" viewBox="0 0 36 36">
@@ -228,7 +290,6 @@ function DocumentsContent() {
             </span>
           </Link>
 
-          {/* Desktop Navigation Links */}
           <div className="hidden md:flex items-center gap-8 text-slate-500 dark:text-slate-400 font-medium h-full">
             <Link
               href="/documents"
@@ -262,7 +323,6 @@ function DocumentsContent() {
             </Link>
           </div>
 
-          {/* Right Section: Theme Toggle, My Files & Mobile Hamburger */}
           <div className="flex items-center gap-3">
             <ThemeToggle />
 
@@ -280,7 +340,6 @@ function DocumentsContent() {
               </button>
             </div>
 
-            {/* Mobile Hamburger Button */}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="md:hidden p-1.5 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white focus:outline-none cursor-pointer"
@@ -297,7 +356,6 @@ function DocumentsContent() {
           </div>
         </div>
 
-        {/* Mobile Dropdown Menu */}
         {mobileMenuOpen && (
           <div className="md:hidden bg-white dark:bg-[#111726] border-b border-slate-200 dark:border-slate-800 px-4 pt-2 pb-4 space-y-2 shadow-lg">
             <Link
@@ -345,7 +403,7 @@ function DocumentsContent() {
 
         <div className="max-w-7xl w-full mx-auto px-4 sm:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
-            {/* Left Column: Info & Features */}
+            {/* Left Column */}
             <div className="lg:col-span-5 space-y-6">
               <div className="flex items-center gap-4">
                 <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-100/90 dark:from-slate-800 dark:to-slate-900 shadow-md shadow-blue-900/5 border border-blue-100 dark:border-slate-800 flex items-center justify-center shrink-0">
@@ -391,19 +449,18 @@ function DocumentsContent() {
               </ul>
             </div>
 
-            {/* Right Column: Reusable Dropzone & Format Cards */}
+            {/* Right Column: Dropzone & Cards */}
             <div className="lg:col-span-7 space-y-5">
               <DropZone
                 ref={dropZoneRef}
                 accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.html"
-                maxSizeLabel="100 MB"
-                description="Supports DOC, DOCX, PDF, XLS, PPT, TXT, and more"
+                maxSizeLabel="10 MB"
+                description="Supports DOC, DOCX, PDF, XLS, PPT, TXT, and more (Max 10 MB per file)"
                 onFilesSelected={(files, preset) => handleFiles(files, preset)}
                 ringColorClass="ring-2 ring-[#123999]"
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
-                {/* PDF Card */}
                 <div
                   onClick={() => triggerPresetUpload('pdf')}
                   className="bg-white dark:bg-[#111726] p-3.5 rounded-xl border border-slate-100 dark:border-slate-800 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-none hover:shadow-md hover:border-blue-200 dark:hover:border-blue-500/50 transition-all cursor-pointer flex items-center justify-between gap-2 group"
@@ -422,7 +479,6 @@ function DocumentsContent() {
                   <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#123999] dark:group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all shrink-0" />
                 </div>
 
-                {/* Word Card */}
                 <div
                   onClick={() => triggerPresetUpload('docx')}
                   className="bg-white dark:bg-[#111726] p-3.5 rounded-xl border border-slate-100 dark:border-slate-800 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-none hover:shadow-md hover:border-blue-200 dark:hover:border-blue-500/50 transition-all cursor-pointer flex items-center justify-between gap-2 group"
@@ -441,7 +497,6 @@ function DocumentsContent() {
                   <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#123999] dark:group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all shrink-0" />
                 </div>
 
-                {/* Excel Card */}
                 <div
                   onClick={() => triggerPresetUpload('xlsx')}
                   className="bg-white dark:bg-[#111726] p-3.5 rounded-xl border border-slate-100 dark:border-slate-800 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-none hover:shadow-md hover:border-blue-200 dark:hover:border-blue-500/50 transition-all cursor-pointer flex items-center justify-between gap-2 group"
@@ -460,7 +515,6 @@ function DocumentsContent() {
                   <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-[#123999] dark:group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all shrink-0" />
                 </div>
 
-                {/* PowerPoint Card */}
                 <div
                   onClick={() => triggerPresetUpload('pptx')}
                   className="bg-white dark:bg-[#111726] p-3.5 rounded-xl border border-slate-100 dark:border-slate-800 shadow-[0_4px_20px_rgba(0,0,0,0.03)] dark:shadow-none hover:shadow-md hover:border-blue-200 dark:hover:border-blue-500/50 transition-all cursor-pointer flex items-center justify-between gap-2 group"
@@ -484,7 +538,7 @@ function DocumentsContent() {
             </div>
           </div>
 
-          {/* Interactive Queue Section */}
+          {/* Queue Section */}
           <div ref={queueSectionRef} className="mt-10 max-w-5xl mx-auto space-y-4">
             {queue.length > 0 && (
               <>
@@ -511,107 +565,141 @@ function DocumentsContent() {
                       />
                       <span>{isBatchConverting ? 'Converting...' : 'Start Conversion'}</span>
                     </button>
-                    {queue.some((q) => q.status === 'completed') && (
-                      <button
-                        onClick={downloadAllZip}
-                        className="inline-flex items-center gap-1.5 bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors cursor-pointer shadow-xs"
-                      >
-                        <Archive className="w-4 h-4" />
-                        <span>ZIP</span>
-                      </button>
-                    )}
+                    
+                    {/* ZIP button: Enabled ONLY when all files in queue are successfully completed */}
+                    <button
+                      onClick={downloadAllZip}
+                      disabled={!areAllFilesReady}
+                      className={`inline-flex items-center justify-center gap-1.5 text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors shadow-xs ${
+                        areAllFilesReady
+                          ? 'bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white cursor-pointer'
+                          : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed opacity-60'
+                      }`}
+                      title={
+                        areAllFilesReady
+                          ? 'Download all converted files as a ZIP'
+                          : 'Available once all files in the queue are ready to download'
+                      }
+                    >
+                      <Archive className="w-4 h-4" />
+                      <span>ZIP</span>
+                    </button>
                   </div>
                 </div>
 
                 <div className="space-y-3">
-                  {queue.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-4 sm:p-5 bg-white dark:bg-[#111726] rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs hover:shadow-md transition-shadow flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4"
-                    >
-                      <div className="flex items-center gap-3.5 min-w-0 flex-1 pr-2">
-                        <div className="w-11 h-11 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-[#123999] dark:text-blue-400 flex items-center justify-center shrink-0 shadow-xs">
-                          <FileText className="w-5 h-5" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-white truncate">
-                            {item.file.name}
-                          </p>
-                          <p className="text-[11px] text-slate-400 mt-0.5">
-                            {formatBytes(item.file.size)}
-                          </p>
-                        </div>
-                      </div>
+                  {queue.map((item) => {
+                    const originalSize = item.file.size;
+                    const targetSize =
+                      item.convertedBlob?.size || item.estimatedSize;
+                    const savingsPercent =
+                      targetSize && originalSize
+                        ? Math.round(
+                            ((originalSize - targetSize) / originalSize) * 100
+                          )
+                        : null;
 
-                      <div className="flex flex-wrap md:flex-nowrap items-center justify-between md:justify-end gap-3 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800/80 shrink-0">
-                        <div className="flex items-center gap-2">
-                          <label className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
-                            Convert to:
-                          </label>
-                          <select
-                            value={item.targetFormat}
-                            onChange={(e) =>
-                              updateTargetFormat(
-                                item.id,
-                                e.target.value as QueuedDoc['targetFormat']
-                              )
-                            }
-                            className="text-xs font-medium bg-[#f4f6fa] dark:bg-[#0e1422] border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#123999] dark:focus:ring-blue-500 cursor-pointer uppercase"
-                          >
-                            <option value="pdf">PDF</option>
-                            <option value="docx">DOCX</option>
-                            <option value="txt">TXT</option>
-                            <option value="xlsx">XLSX</option>
-                            <option value="pptx">PPTX</option>
-                          </select>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 shrink-0 ml-auto md:ml-0">
-                          {item.status === 'completed' && (
-                            <button
-                              onClick={() => downloadSingle(item)}
-                              className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 bg-emerald-50 dark:bg-emerald-500/15 text-[#38c18c] dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/25 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer shadow-xs"
-                            >
-                              <Download className="w-3.5 h-3.5" />
-                              <span>Download</span>
-                            </button>
-                          )}
-                          {item.status === 'converting' && (
-                            <div className="w-28 sm:w-32 flex items-center justify-center py-1.5">
-                              <RefreshCw className="w-4 h-4 text-[#123999] dark:text-blue-400 animate-spin" />
+                    const allowedFormats = getAllowedDocumentFormats(item.file);
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-4 sm:p-5 bg-white dark:bg-[#111726] rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs hover:shadow-md transition-shadow flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0 flex-1 pr-2">
+                          <div className="w-11 h-11 rounded-xl bg-blue-50 dark:bg-blue-500/10 text-[#123999] dark:text-blue-400 flex items-center justify-center shrink-0 shadow-xs">
+                            <FileText className="w-5 h-5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-white truncate">
+                              {item.file.name}
+                            </p>
+                            <div className="flex items-center gap-1.5 text-[11px] sm:text-xs mt-0.5 text-slate-500 dark:text-slate-400">
+                              <span className="shrink-0">{formatBytes(originalSize)}</span>
+                              {targetSize && (
+                                <>
+                                  <span className="text-slate-300 dark:text-slate-600 shrink-0">→</span>
+                                  <span className="text-[#123999] dark:text-blue-400 font-semibold shrink-0">
+                                    {formatBytes(targetSize)}
+                                  </span>
+                                  {savingsPercent !== null &&
+                                    savingsPercent > 0 && (
+                                      <span className="text-[#38c18c] dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/15 px-1.5 py-0.5 rounded text-[10px] font-semibold shrink-0">
+                                        -{savingsPercent}%
+                                      </span>
+                                    )}
+                                </>
+                              )}
                             </div>
-                          )}
-                          {item.status === 'error' && (
-                            <span title={item.error}>
-                              <AlertCircle className="w-4 h-4 text-red-500 dark:text-red-400" />
-                            </span>
-                          )}
-                          {item.status === 'idle' && (
-                            <button
-                              onClick={() => convertSingle(item.id)}
-                              className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-white bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 py-1.5 rounded-xl transition-all shadow-md shadow-blue-900/15 cursor-pointer"
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap md:flex-nowrap items-center justify-between md:justify-end gap-3 pt-3 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800/80 shrink-0">
+                          <div className="flex items-center gap-2">
+                            <label className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
+                              Convert to:
+                            </label>
+                            <select
+                              value={item.targetFormat}
+                              onChange={(e) =>
+                                updateTargetFormat(item.id, e.target.value)
+                              }
+                              className="text-xs font-medium bg-[#f4f6fa] dark:bg-[#0e1422] border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-[#123999] dark:focus:ring-blue-500 cursor-pointer uppercase"
                             >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              <span>Convert</span>
+                              {allowedFormats.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0 ml-auto md:ml-0">
+                            {item.status === 'completed' && (
+                              <button
+                                onClick={() => downloadSingle(item)}
+                                className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 bg-emerald-50 dark:bg-emerald-500/15 text-[#38c18c] dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/25 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Download</span>
+                              </button>
+                            )}
+                            {item.status === 'converting' && (
+                              <div className="w-28 sm:w-32 flex items-center justify-center py-1.5">
+                                <RefreshCw className="w-4 h-4 text-[#123999] dark:text-blue-400 animate-spin" />
+                              </div>
+                            )}
+                            {item.status === 'error' && (
+                              <span title={item.error}>
+                                <AlertCircle className="w-4 h-4 text-red-500 dark:text-red-400" />
+                              </span>
+                            )}
+                            {item.status === 'idle' && (
+                              <button
+                                onClick={() => convertSingle(item.id)}
+                                className="w-28 sm:w-32 inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-white bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 py-1.5 rounded-xl transition-all shadow-md shadow-blue-900/15 cursor-pointer"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                <span>Convert</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={() => removeFile(item.id)}
+                              className="p-2 text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15 rounded-xl transition-colors cursor-pointer"
+                              title="Remove from Queue"
+                            >
+                              <Trash2 className="w-4 h-4" />
                             </button>
-                          )}
-                          <button
-                            onClick={() => removeFile(item.id)}
-                            className="p-2 text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/15 rounded-xl transition-colors cursor-pointer"
-                            title="Remove from Queue"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}
           </div>
 
-          {/* Popular Document Conversions Grid */}
+          {/* Popular Conversions */}
           <section className="mt-16 pt-10 border-t border-slate-200/70 dark:border-slate-800/80">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
               <div>
