@@ -17,14 +17,23 @@ import {
 import JSZip from 'jszip';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { DropZone, DropZoneRef } from '@/components/DropZone';
-import { convertDocument } from '@/lib/converters/document';
 import { getAllowedDocumentFormats } from '@/lib/converters/documentRules';
+import { convertPdfToDocx } from '@/lib/converters/pdfToDocx';
+import { convertPdfToDoc } from '@/lib/converters/pdfToDoc';
+import { convertPdfToPptx } from '@/lib/converters/pdfToPptx';
+import { convertPdfToTxt } from '@/lib/converters/pdfToTxt';
+import { convertPdfToHtml } from '@/lib/converters/pdfToHtml';
+import { convertDocxToHtml } from '@/lib/converters/docxToHtml';
+import { convertPdfToJpg } from '@/lib/converters/pdfToJpg';
+import { convertPdfToPng } from '@/lib/converters/pdfToPng';
+import { convertDocxToPdf } from '@/lib/converters/docxToPdf';
 
 interface QueuedDoc {
   id: string;
   file: File;
   targetFormat: string;
   status: 'idle' | 'converting' | 'completed' | 'error';
+  statusMessage?: string;
   convertedBlob?: Blob;
   estimatedSize?: number;
   error?: string;
@@ -35,15 +44,15 @@ const POPULAR_DOC_CONVERSIONS: {
   to: string;
   desc: string;
 }[] = [
-  { from: 'PDF', to: 'docx', desc: 'Adobe PDF to Word Document' },
-  { from: 'DOCX', to: 'pdf', desc: 'Word Document to Adobe PDF' },
-  { from: 'PDF', to: 'txt', desc: 'Adobe PDF to Plain Text' },
-  { from: 'XLSX', to: 'pdf', desc: 'Excel Spreadsheet to PDF' },
-  { from: 'PPTX', to: 'pdf', desc: 'PowerPoint to Adobe PDF' },
-  { from: 'TXT', to: 'pdf', desc: 'Plain Text to Adobe PDF' },
-  { from: 'PDF', to: 'xlsx', desc: 'PDF Tables to Excel Sheet' },
-  { from: 'DOCX', to: 'txt', desc: 'Word Document to Plain Text' },
-];
+    { from: 'PDF', to: 'docx', desc: 'Adobe PDF to Word Document' },
+    { from: 'PDF', to: 'pptx', desc: 'Adobe PDF to PowerPoint Presentation' },
+    { from: 'DOCX', to: 'pdf', desc: 'Word Document to Adobe PDF' },
+    { from: 'PDF', to: 'txt', desc: 'Adobe PDF to Plain Text' },
+    { from: 'PDF', to: 'html', desc: 'Adobe PDF to Standalone HTML' },
+    { from: 'XLSX', to: 'pdf', desc: 'Excel Spreadsheet to PDF' },
+    { from: 'PPTX', to: 'pdf', desc: 'PowerPoint to Adobe PDF' },
+    { from: 'PDF', to: 'xlsx', desc: 'PDF Tables to Excel Sheet' },
+  ];
 
 function DocumentsContent() {
   const [queue, setQueue] = useState<QueuedDoc[]>([]);
@@ -77,13 +86,13 @@ function DocumentsContent() {
     if (!incomingFiles || incomingFiles.length === 0) return;
 
     const rawFiles = Array.from(incomingFiles);
-    const TEN_MB = 10 * 1024 * 1024;
+    const FIFTEEN_MB = 15 * 1024 * 1024;
 
     const validFiles: File[] = [];
     const skippedFiles: string[] = [];
 
     rawFiles.forEach((f) => {
-      if (f.size > TEN_MB) {
+      if (f.size > FIFTEEN_MB) {
         skippedFiles.push(f.name);
       } else {
         validFiles.push(f);
@@ -92,8 +101,8 @@ function DocumentsContent() {
 
     if (skippedFiles.length > 0) {
       alert(
-        `File size limit exceeded: The following file(s) exceeded the 10 MB limit and were not added:\n• ${skippedFiles.join(
-          '\n• '
+        `File size limit exceeded: The following file(s) exceeded the 15 MB limit and were not added:\n${skippedFiles.join(
+          '\n'
         )}`
       );
     }
@@ -102,18 +111,17 @@ function DocumentsContent() {
 
     const newEntries: QueuedDoc[] = validFiles.map((f, index) => {
       const ext = f.name.split('.').pop()?.toLowerCase();
-      
+
       let defaultTarget = preselectedTarget || 'pdf';
       if (!preselectedTarget) {
         if (ext === 'pdf') defaultTarget = 'docx';
         else if (ext === 'docx' || ext === 'doc' || ext === 'txt') defaultTarget = 'pdf';
       }
 
-      // Initial rough size estimation based on format
       let estimatedSize = f.size;
       if (defaultTarget === 'txt') {
-        estimatedSize = Math.round(f.size * 0.15); // Text extraction is usually much smaller
-      } else if (defaultTarget === 'pdf' || defaultTarget === 'docx') {
+        estimatedSize = Math.round(f.size * 0.15);
+      } else if (defaultTarget === 'pdf' || defaultTarget === 'docx' || defaultTarget === 'doc' || defaultTarget === 'pptx' || defaultTarget === 'html') {
         estimatedSize = Math.round(f.size * 1.1);
       }
 
@@ -143,7 +151,7 @@ function DocumentsContent() {
           let estimatedSize = q.file.size;
           if (targetFormat === 'txt') {
             estimatedSize = Math.round(q.file.size * 0.15);
-          } else if (targetFormat === 'pdf' || targetFormat === 'docx') {
+          } else if (targetFormat === 'pdf' || targetFormat === 'docx' || targetFormat === 'doc' || targetFormat === 'pptx' || targetFormat === 'html') {
             estimatedSize = Math.round(q.file.size * 1.1);
           }
           return {
@@ -165,14 +173,78 @@ function DocumentsContent() {
 
     setQueue((prev) =>
       prev.map((q) =>
-        q.id === id ? { ...q, status: 'converting', error: undefined } : q
+        q.id === id ? { ...q, status: 'converting', statusMessage: 'Processing file structure...', error: undefined } : q
       )
     );
 
     try {
-      const convertedBlob = await convertDocument(item.file, {
-        targetFormat: item.targetFormat as any,
-      });
+      const ext = item.file.name.split('.').pop()?.toLowerCase();
+      let convertedBlob: Blob;
+
+      if (ext === 'pdf' && item.targetFormat === 'doc') {
+        convertedBlob = await convertPdfToDoc(item.file);
+      } else if (ext === 'pdf' && item.targetFormat === 'docx') {
+        convertedBlob = await convertPdfToDocx(item.file);
+      } else if (ext === 'pdf' && item.targetFormat === 'pptx') {
+        convertedBlob = await convertPdfToPptx(item.file);
+      } else if (ext === 'pdf' && item.targetFormat === 'txt') {
+        convertedBlob = await convertPdfToTxt(item.file);
+      } else if (ext === 'pdf' && item.targetFormat === 'html') {
+        convertedBlob = await convertPdfToHtml(item.file, {
+          scale: 1.5,
+          backgroundResolutionMultiplier: 1.5,
+          textLayerMode: 'vector',
+        });
+      } else if (ext === 'docx' && item.targetFormat === 'html') {
+        convertedBlob = await convertDocxToHtml(item.file, {
+          scale: 1.25,
+          imageQuality: 0.75,
+          onProgress: (pct) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id ? { ...q, statusMessage: `Converting Word to HTML (${pct}%)` } : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'docx' && item.targetFormat === 'pdf') {
+        convertedBlob = await convertDocxToPdf(item.file, {
+          scale: 2,          // 2x resolution keeps small text crisp without bloating file size
+          jpegQuality: 0.95, // High visual fidelity JPEG compression
+          onProgress: (percent) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id ? { ...q, statusMessage: `Converting: ${percent}%` } : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'pdf' && (item.targetFormat === 'jpg' || item.targetFormat === 'jpeg')) {
+        convertedBlob = await convertPdfToJpg(item.file, {
+          scale: 1.4,    // Crisp & compact
+          quality: 0.75,  // Balanced file size compression
+          onProgress: (pct, current, total) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id ? { ...q, statusMessage: `Rendering page ${current}/${total} (${pct}%)` } : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'pdf' && item.targetFormat === 'png') {
+        convertedBlob = await convertPdfToPng(item.file, {
+          scale: 1.4,
+          onProgress: (pct, current, total) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id ? { ...q, statusMessage: `Rendering PNG page ${current}/${total} (${pct}%)` } : q
+              )
+            );
+          },
+        });
+      } else {
+        throw new Error(`Conversion from ${ext} to ${item.targetFormat} is not implemented yet.`);
+      }
 
       setQueue((prev) =>
         prev.map((q) =>
@@ -180,6 +252,7 @@ function DocumentsContent() {
             ? {
                 ...q,
                 status: 'completed',
+                statusMessage: undefined,
                 convertedBlob,
                 estimatedSize: convertedBlob.size,
               }
@@ -190,7 +263,7 @@ function DocumentsContent() {
       const message = err instanceof Error ? err.message : 'Conversion failed';
       setQueue((prev) =>
         prev.map((q) =>
-          q.id === id ? { ...q, status: 'error', error: message } : q
+          q.id === id ? { ...q, status: 'error', statusMessage: undefined, error: message } : q
         )
       );
     }
@@ -212,15 +285,17 @@ function DocumentsContent() {
       item.file.name.substring(0, item.file.name.lastIndexOf('.')) ||
       item.file.name ||
       'document';
-    
-    const isPdfToImage =
-      item.file.type === 'application/pdf' &&
-      (item.targetFormat === 'png' || item.targetFormat === 'jpeg' || item.targetFormat === 'jpg');
-    const fileExtension = isPdfToImage ? 'zip' : item.targetFormat;
+
+    const isZipOutput =
+      item.convertedBlob.type === 'application/zip' ||
+      ['jpg', 'jpeg', 'png'].includes(item.targetFormat);
+
+    const outExt = isZipOutput ? 'zip' : item.targetFormat;
+    const suffix = ['jpg', 'jpeg', 'png'].includes(item.targetFormat) ? '_images' : '';
 
     const link = document.createElement('a');
     link.href = URL.createObjectURL(item.convertedBlob);
-    link.download = `${baseName}_to_${item.targetFormat}.${fileExtension}`;
+    link.download = `${baseName}${suffix}.${outExt}`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -235,12 +310,15 @@ function DocumentsContent() {
           item.file.name.substring(0, item.file.name.lastIndexOf('.')) ||
           item.file.name ||
           'document';
-        const isPdfToImage =
-          item.file.type === 'application/pdf' &&
-          (item.targetFormat === 'png' || item.targetFormat === 'jpeg' || item.targetFormat === 'jpg');
-        const fileExtension = isPdfToImage ? 'zip' : item.targetFormat;
 
-        zip.file(`${baseName}.${fileExtension}`, item.convertedBlob);
+        const isZipOutput =
+          item.convertedBlob.type === 'application/zip' ||
+          ['jpg', 'jpeg', 'png'].includes(item.targetFormat);
+
+        const outExt = isZipOutput ? 'zip' : item.targetFormat;
+        const suffix = ['jpg', 'jpeg', 'png'].includes(item.targetFormat) ? '_images' : '';
+
+        zip.file(`${baseName}${suffix}.${outExt}`, item.convertedBlob);
         count++;
       }
     });
@@ -454,8 +532,8 @@ function DocumentsContent() {
               <DropZone
                 ref={dropZoneRef}
                 accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.rtf,.html"
-                maxSizeLabel="10 MB"
-                description="Supports DOC, DOCX, PDF, XLS, PPT, TXT, and more (Max 10 MB per file)"
+                maxSizeLabel="15 MB"
+                description="Supports DOC, DOCX, PDF, XLS, PPT, TXT, and more (Max 15 MB per file)"
                 onFilesSelected={(files, preset) => handleFiles(files, preset)}
                 ringColorClass="ring-2 ring-[#123999]"
               />
@@ -559,22 +637,20 @@ function DocumentsContent() {
                       className="inline-flex items-center gap-2 bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold px-4 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-blue-900/15 cursor-pointer"
                     >
                       <RefreshCw
-                        className={`w-3.5 h-3.5 ${
-                          isBatchConverting ? 'animate-spin' : ''
-                        }`}
+                        className={`w-3.5 h-3.5 ${isBatchConverting ? 'animate-spin' : ''
+                          }`}
                       />
                       <span>{isBatchConverting ? 'Converting...' : 'Start Conversion'}</span>
                     </button>
-                    
-                    {/* ZIP button: Enabled ONLY when all files in queue are successfully completed */}
+
+                    {/* ZIP button */}
                     <button
                       onClick={downloadAllZip}
                       disabled={!areAllFilesReady}
-                      className={`inline-flex items-center justify-center gap-1.5 text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors shadow-xs ${
-                        areAllFilesReady
+                      className={`inline-flex items-center justify-center gap-1.5 text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors shadow-xs ${areAllFilesReady
                           ? 'bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white cursor-pointer'
                           : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed opacity-60'
-                      }`}
+                        }`}
                       title={
                         areAllFilesReady
                           ? 'Download all converted files as a ZIP'
@@ -664,8 +740,11 @@ function DocumentsContent() {
                               </button>
                             )}
                             {item.status === 'converting' && (
-                              <div className="w-28 sm:w-32 flex items-center justify-center py-1.5">
-                                <RefreshCw className="w-4 h-4 text-[#123999] dark:text-blue-400 animate-spin" />
+                              <div className="w-36 sm:w-44 flex items-center gap-2 px-2 py-1.5 bg-blue-50 dark:bg-blue-500/10 rounded-xl">
+                                <RefreshCw className="w-3.5 h-3.5 text-[#123999] dark:text-blue-400 animate-spin shrink-0" />
+                                <span className="text-[11px] text-[#123999] dark:text-blue-400 truncate">
+                                  {item.statusMessage || 'Converting...'}
+                                </span>
                               </div>
                             )}
                             {item.status === 'error' && (
