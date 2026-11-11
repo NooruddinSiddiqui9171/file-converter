@@ -865,23 +865,23 @@ function buildDynamicCss(params: {
   }
 
   for (const fs of params.fontSizePool.entries()) {
-    lines.push(`.fs${fs.hex}{font-size:${fmtNum(fs.value)}px;}`);
+    lines.push(`.fs${fs.hex}{font-size:${fmtNum(fs.value * PX_TO_PT)}pt;}`);
   }
 
   for (const y of params.yPool.entries()) {
-    lines.push(`.y${y.hex}{bottom:${fmtNum(y.value)}px;}`);
+    lines.push(`.y${y.hex}{bottom:${fmtNum(y.value * PX_TO_PT)}pt;}`);
   }
 
   for (const h of params.heightPool.entries()) {
-    lines.push(`.h${h.hex}{height:${fmtNum(h.value)}px;}`);
+    lines.push(`.h${h.hex}{height:${fmtNum(h.value * PX_TO_PT)}pt;}`);
   }
 
   for (const w of params.widthPool.entries()) {
-    lines.push(`.w${w.hex}{width:${fmtNum(w.value)}px;}`);
+    lines.push(`.w${w.hex}{width:${fmtNum(w.value * PX_TO_PT)}pt;}`);
   }
 
   for (const x of params.xPool.entries()) {
-    lines.push(`.x${x.hex}{left:${fmtNum(x.value)}px;}`);
+    lines.push(`.x${x.hex}{left:${fmtNum(x.value * PX_TO_PT)}pt;}`);
   }
 
   // @media print rules in pt

@@ -27,6 +27,11 @@ import { convertDocxToHtml } from '@/lib/converters/docxToHtml';
 import { convertPdfToJpg } from '@/lib/converters/pdfToJpg';
 import { convertPdfToPng } from '@/lib/converters/pdfToPng';
 import { convertDocxToPdf } from '@/lib/converters/docxToPdf';
+import { convertDocxToDoc } from '@/lib/converters/docxToDoc';
+import { convertDocxToPptx } from '@/lib/converters/docxToPptx';
+import { convertDocxToJpg } from '@/lib/converters/docxToJpg';
+import { convertDocxToPng } from '@/lib/converters/docxToPng';
+import { convertDocxToTxt } from '@/lib/converters/docxToTxt';
 
 interface QueuedDoc {
   id: string;
@@ -44,15 +49,15 @@ const POPULAR_DOC_CONVERSIONS: {
   to: string;
   desc: string;
 }[] = [
-    { from: 'PDF', to: 'docx', desc: 'Adobe PDF to Word Document' },
-    { from: 'PDF', to: 'pptx', desc: 'Adobe PDF to PowerPoint Presentation' },
-    { from: 'DOCX', to: 'pdf', desc: 'Word Document to Adobe PDF' },
-    { from: 'PDF', to: 'txt', desc: 'Adobe PDF to Plain Text' },
-    { from: 'PDF', to: 'html', desc: 'Adobe PDF to Standalone HTML' },
-    { from: 'XLSX', to: 'pdf', desc: 'Excel Spreadsheet to PDF' },
-    { from: 'PPTX', to: 'pdf', desc: 'PowerPoint to Adobe PDF' },
-    { from: 'PDF', to: 'xlsx', desc: 'PDF Tables to Excel Sheet' },
-  ];
+  { from: 'PDF', to: 'docx', desc: 'Adobe PDF to Word Document' },
+  { from: 'PDF', to: 'pptx', desc: 'Adobe PDF to PowerPoint Presentation' },
+  { from: 'DOCX', to: 'pdf', desc: 'Word Document to Adobe PDF' },
+  { from: 'DOCX', to: 'pptx', desc: 'Word Document to PowerPoint' },
+  { from: 'PDF', to: 'txt', desc: 'Adobe PDF to Plain Text' },
+  { from: 'PDF', to: 'html', desc: 'Adobe PDF to Standalone HTML' },
+  { from: 'XLSX', to: 'pdf', desc: 'Excel Spreadsheet to PDF' },
+  { from: 'PPTX', to: 'pdf', desc: 'PowerPoint to Adobe PDF' },
+];
 
 function DocumentsContent() {
   const [queue, setQueue] = useState<QueuedDoc[]>([]);
@@ -121,7 +126,13 @@ function DocumentsContent() {
       let estimatedSize = f.size;
       if (defaultTarget === 'txt') {
         estimatedSize = Math.round(f.size * 0.15);
-      } else if (defaultTarget === 'pdf' || defaultTarget === 'docx' || defaultTarget === 'doc' || defaultTarget === 'pptx' || defaultTarget === 'html') {
+      } else if (
+        defaultTarget === 'pdf' ||
+        defaultTarget === 'docx' ||
+        defaultTarget === 'doc' ||
+        defaultTarget === 'pptx' ||
+        defaultTarget === 'html'
+      ) {
         estimatedSize = Math.round(f.size * 1.1);
       }
 
@@ -151,7 +162,13 @@ function DocumentsContent() {
           let estimatedSize = q.file.size;
           if (targetFormat === 'txt') {
             estimatedSize = Math.round(q.file.size * 0.15);
-          } else if (targetFormat === 'pdf' || targetFormat === 'docx' || targetFormat === 'doc' || targetFormat === 'pptx' || targetFormat === 'html') {
+          } else if (
+            targetFormat === 'pdf' ||
+            targetFormat === 'docx' ||
+            targetFormat === 'doc' ||
+            targetFormat === 'pptx' ||
+            targetFormat === 'html'
+          ) {
             estimatedSize = Math.round(q.file.size * 1.1);
           }
           return {
@@ -173,7 +190,14 @@ function DocumentsContent() {
 
     setQueue((prev) =>
       prev.map((q) =>
-        q.id === id ? { ...q, status: 'converting', statusMessage: 'Processing file structure...', error: undefined } : q
+        q.id === id
+          ? {
+              ...q,
+              status: 'converting',
+              statusMessage: 'Processing file structure...',
+              error: undefined,
+            }
+          : q
       )
     );
 
@@ -181,52 +205,57 @@ function DocumentsContent() {
       const ext = item.file.name.split('.').pop()?.toLowerCase();
       let convertedBlob: Blob;
 
+      // PDF Conversions
       if (ext === 'pdf' && item.targetFormat === 'doc') {
         convertedBlob = await convertPdfToDoc(item.file);
       } else if (ext === 'pdf' && item.targetFormat === 'docx') {
         convertedBlob = await convertPdfToDocx(item.file);
       } else if (ext === 'pdf' && item.targetFormat === 'pptx') {
-        convertedBlob = await convertPdfToPptx(item.file);
+        convertedBlob = await convertPdfToPptx(item.file, {
+          onProgress: (percent) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? { ...q, statusMessage: `Rendering slides (${percent}%)` }
+                  : q
+              )
+            );
+          },
+        });
       } else if (ext === 'pdf' && item.targetFormat === 'txt') {
         convertedBlob = await convertPdfToTxt(item.file);
       } else if (ext === 'pdf' && item.targetFormat === 'html') {
         convertedBlob = await convertPdfToHtml(item.file, {
           scale: 1.5,
-          backgroundResolutionMultiplier: 1.5,
+          backgroundResolutionMultiplier: 1.0,
           textLayerMode: 'vector',
-        });
-      } else if (ext === 'docx' && item.targetFormat === 'html') {
-        convertedBlob = await convertDocxToHtml(item.file, {
-          scale: 1.25,
           imageQuality: 0.75,
           onProgress: (pct) => {
             setQueue((prev) =>
               prev.map((q) =>
-                q.id === id ? { ...q, statusMessage: `Converting Word to HTML (${pct}%)` } : q
+                q.id === id
+                  ? { ...q, statusMessage: `Converting PDF to HTML (${pct}%)` }
+                  : q
               )
             );
           },
         });
-      } else if (ext === 'docx' && item.targetFormat === 'pdf') {
-        convertedBlob = await convertDocxToPdf(item.file, {
-          scale: 2,          // 2x resolution keeps small text crisp without bloating file size
-          jpegQuality: 0.95, // High visual fidelity JPEG compression
-          onProgress: (percent) => {
-            setQueue((prev) =>
-              prev.map((q) =>
-                q.id === id ? { ...q, statusMessage: `Converting: ${percent}%` } : q
-              )
-            );
-          },
-        });
-      } else if (ext === 'pdf' && (item.targetFormat === 'jpg' || item.targetFormat === 'jpeg')) {
+      } else if (
+        ext === 'pdf' &&
+        (item.targetFormat === 'jpg' || item.targetFormat === 'jpeg')
+      ) {
         convertedBlob = await convertPdfToJpg(item.file, {
-          scale: 1.4,    // Crisp & compact
-          quality: 0.75,  // Balanced file size compression
+          scale: 1.4,
+          quality: 0.75,
           onProgress: (pct, current, total) => {
             setQueue((prev) =>
               prev.map((q) =>
-                q.id === id ? { ...q, statusMessage: `Rendering page ${current}/${total} (${pct}%)` } : q
+                q.id === id
+                  ? {
+                      ...q,
+                      statusMessage: `Rendering page ${current}/${total} (${pct}%)`,
+                    }
+                  : q
               )
             );
           },
@@ -237,13 +266,130 @@ function DocumentsContent() {
           onProgress: (pct, current, total) => {
             setQueue((prev) =>
               prev.map((q) =>
-                q.id === id ? { ...q, statusMessage: `Rendering PNG page ${current}/${total} (${pct}%)` } : q
+                q.id === id
+                  ? {
+                      ...q,
+                      statusMessage: `Rendering PNG page ${current}/${total} (${pct}%)`,
+                    }
+                  : q
+              )
+            );
+          },
+        });
+
+// Word / DOCX Conversions
+      } else if (ext === 'docx' && item.targetFormat === 'txt') {
+        convertedBlob = await convertDocxToTxt(item.file, {
+          onProgress: (percent) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? { ...q, statusMessage: `Extracting text (${percent}%)` }
+                  : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'docx' && item.targetFormat === 'pdf') {
+        convertedBlob = await convertDocxToPdf(item.file, {
+          onProgress: (percent) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? { ...q, statusMessage: `Converting Word to PDF (${percent}%)` }
+                  : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'docx' && item.targetFormat === 'doc') {
+        convertedBlob = await convertDocxToDoc(item.file, {
+          onProgress: (percent) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? { ...q, statusMessage: `Converting Word to DOC (${percent}%)` }
+                  : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'docx' && item.targetFormat === 'pptx') {
+        convertedBlob = await convertDocxToPptx(item.file, {
+          renderScale: 1.8,
+          jpegQuality: 0.85,
+          onProgress: (percent) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? { ...q, statusMessage: `Converting Word to PPTX (${percent}%)` }
+                  : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'docx' && item.targetFormat === 'html') {
+        convertedBlob = await convertDocxToHtml(item.file, {
+          scale: 1.5,
+          backgroundResolutionMultiplier: 1.0,
+          textLayerMode: 'vector',
+          imageQuality: 0.75,
+          onProgress: (pct) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? { ...q, statusMessage: `Converting Word to HTML (${pct}%)` }
+                  : q
+              )
+            );
+          },
+        });
+      } else if (
+        ext === 'docx' &&
+        (item.targetFormat === 'jpg' || item.targetFormat === 'jpeg')
+      ) {
+        convertedBlob = await convertDocxToJpg(item.file, {
+          scale: 1.5,
+          quality: 0.8,
+          onProgress: (pct, current, total) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? {
+                      ...q,
+                      statusMessage:
+                        current && total
+                          ? `Rendering page ${current}/${total} (${pct}%)`
+                          : `Converting Word to JPG (${pct}%)`,
+                    }
+                  : q
+              )
+            );
+          },
+        });
+      } else if (ext === 'docx' && item.targetFormat === 'png') {
+        convertedBlob = await convertDocxToPng(item.file, {
+          scale: 1.4,
+          onProgress: (pct, current, total) => {
+            setQueue((prev) =>
+              prev.map((q) =>
+                q.id === id
+                  ? {
+                      ...q,
+                      statusMessage:
+                        current && total
+                          ? `Rendering PNG page ${current}/${total} (${pct}%)`
+                          : `Converting Word to PNG (${pct}%)`,
+                    }
+                  : q
               )
             );
           },
         });
       } else {
-        throw new Error(`Conversion from ${ext} to ${item.targetFormat} is not implemented yet.`);
+        throw new Error(
+          `Conversion from ${ext} to ${item.targetFormat} is not implemented yet.`
+        );
       }
 
       setQueue((prev) =>
@@ -260,10 +406,18 @@ function DocumentsContent() {
         )
       );
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Conversion failed';
+      const message =
+        err instanceof Error ? err.message : 'Conversion failed';
       setQueue((prev) =>
         prev.map((q) =>
-          q.id === id ? { ...q, status: 'error', statusMessage: undefined, error: message } : q
+          q.id === id
+            ? {
+                ...q,
+                status: 'error',
+                statusMessage: undefined,
+                error: message,
+              }
+            : q
         )
       );
     }
@@ -286,12 +440,10 @@ function DocumentsContent() {
       item.file.name ||
       'document';
 
-    const isZipOutput =
-      item.convertedBlob.type === 'application/zip' ||
-      ['jpg', 'jpeg', 'png'].includes(item.targetFormat);
-
-    const outExt = isZipOutput ? 'zip' : item.targetFormat;
-    const suffix = ['jpg', 'jpeg', 'png'].includes(item.targetFormat) ? '_images' : '';
+    // Only multi-page image exports should be zipped
+    const isImageArchive = ['jpg', 'jpeg', 'png'].includes(item.targetFormat);
+    const outExt = isImageArchive ? 'zip' : item.targetFormat;
+    const suffix = isImageArchive ? '_images' : '';
 
     const link = document.createElement('a');
     link.href = URL.createObjectURL(item.convertedBlob);
@@ -311,12 +463,9 @@ function DocumentsContent() {
           item.file.name ||
           'document';
 
-        const isZipOutput =
-          item.convertedBlob.type === 'application/zip' ||
-          ['jpg', 'jpeg', 'png'].includes(item.targetFormat);
-
-        const outExt = isZipOutput ? 'zip' : item.targetFormat;
-        const suffix = ['jpg', 'jpeg', 'png'].includes(item.targetFormat) ? '_images' : '';
+        const isImageArchive = ['jpg', 'jpeg', 'png'].includes(item.targetFormat);
+        const outExt = isImageArchive ? 'zip' : item.targetFormat;
+        const suffix = isImageArchive ? '_images' : '';
 
         zip.file(`${baseName}${suffix}.${outExt}`, item.convertedBlob);
         count++;
@@ -637,8 +786,9 @@ function DocumentsContent() {
                       className="inline-flex items-center gap-2 bg-[#123999] dark:bg-blue-600 hover:bg-blue-800 dark:hover:bg-blue-500 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold px-4 sm:px-5 py-2.5 rounded-xl transition-all shadow-md shadow-blue-900/15 cursor-pointer"
                     >
                       <RefreshCw
-                        className={`w-3.5 h-3.5 ${isBatchConverting ? 'animate-spin' : ''
-                          }`}
+                        className={`w-3.5 h-3.5 ${
+                          isBatchConverting ? 'animate-spin' : ''
+                        }`}
                       />
                       <span>{isBatchConverting ? 'Converting...' : 'Start Conversion'}</span>
                     </button>
@@ -647,10 +797,11 @@ function DocumentsContent() {
                     <button
                       onClick={downloadAllZip}
                       disabled={!areAllFilesReady}
-                      className={`inline-flex items-center justify-center gap-1.5 text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors shadow-xs ${areAllFilesReady
+                      className={`inline-flex items-center justify-center gap-1.5 text-xs sm:text-sm font-medium px-3.5 py-2.5 rounded-xl transition-colors shadow-xs ${
+                        areAllFilesReady
                           ? 'bg-[#38c18c] dark:bg-emerald-600 hover:bg-emerald-600 dark:hover:bg-emerald-500 text-white cursor-pointer'
                           : 'bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-600 cursor-not-allowed opacity-60'
-                        }`}
+                      }`}
                       title={
                         areAllFilesReady
                           ? 'Download all converted files as a ZIP'
